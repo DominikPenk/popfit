@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from functools import partialmethod
-from typing import Any, Iterable, Optional, Sequence, overload
+from typing import Any, Optional, Sequence, overload
 
 import torch
 import torch.nn as nn
+
+from ..parametrization.base import Parametrization
 
 
 class Variable(nn.Module):
@@ -17,6 +18,7 @@ class Variable(nn.Module):
         population: Optional[torch.Tensor] = None,
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
+        parametrization: Optional[Parametrization] = None,
         requires_grad: bool = True,
     ) -> None:
         super().__init__()
@@ -87,6 +89,10 @@ class Variable(nn.Module):
 
         self.clamp_to_bounds(clamp_best=True)
 
+        self._var_parametrizations = nn.ModuleList()
+        if parametrization:
+            self.push_parametrization(parametrization)
+
         self._initialized = True
 
     def get_domain_center(self):
@@ -146,12 +152,69 @@ class Variable(nn.Module):
         if clamp_best:
             self.global_best.clamp_(min=self._bounds[0], max=self._bounds[1])
 
-    @classmethod
-    def _unwrap(cls, obj) -> torch.Tensor:
-        if isinstance(obj, Variable):
-            return obj.population if obj.training else obj.global_best
-        else:
-            return obj
+    # --------------------------------------------------------------
+    # Parametrization
+    # --------------------------------------------------------------
+
+    def push_parametrization(self, parametrization: Parametrization) -> None:
+        if not isinstance(parametrization, Parametrization):
+            raise TypeError("parametrization must be a subclass of Parametrization")
+
+        with torch.no_grad():
+            new_pop = parametrization.inverse(self.population)
+            new_best = parametrization.inverse(self.global_best)
+            new_bounds = parametrization.inverse_bounds(self._bounds)
+
+            if not new_bounds.size(0) == 2:
+                raise ValueError("Bounds must be of shape (2, ...)")
+
+            if not torch.all(new_bounds[0] <= new_bounds[1]):
+                raise ValueError(
+                    "Inconsistent boundaries after applying parametrization"
+                )
+
+            if not new_bounds.shape[1:] == new_best.shape:
+                raise ValueError("Inconsistent shape after applying parametrization")
+
+            if not new_pop.shape[1:] == new_best.shape:
+                raise ValueError("Inconsistent shape after applying parametrization")
+
+            self.population.copy_(new_pop)
+            self.global_best.copy_(new_best)
+            self._bounds.copy_(new_bounds)
+            self._var_parametrizations.append(parametrization)
+
+    def pop_parametrization(self) -> Parametrization:
+        if len(self._var_parametrizations) == 0:
+            raise RuntimeError(
+                "Tried to pop a parametrization from an unparametrize Variable"
+            )
+
+        p: Parametrization = self._var_parametrizations.pop(-1)  # type: ignore[reportAssignmentType]
+        with torch.no_grad():
+            new_bounds = p.forward_bounds(self._bounds)
+            new_pop = p.forward(self.population)
+            new_best = p.forward(self.global_best)
+
+            if not new_bounds.size(0) == 2:
+                raise ValueError("Bounds must be of shape (2, ...)")
+
+            if not torch.all(new_bounds[0] <= new_bounds[1]):
+                raise ValueError(
+                    "Inconsistent boundaries after removing parametrization"
+                )
+
+            if not new_bounds.shape[1:] == new_best.shape:
+                raise ValueError("Inconsistent shape after removing parametrization")
+
+            if not new_pop.shape[1:] == new_best.shape:
+                raise ValueError("Inconsistent shape after removing parametrization")
+
+            self.population.copy_(new_pop)
+            self.global_best.copy_(new_best)
+            self._bounds.copy_(new_bounds)
+
+        return p
 
     # --------------------------------------------------------------
     # Operators
@@ -160,101 +223,30 @@ class Variable(nn.Module):
     def __bool__(self):
         raise RuntimeError("PopParameter cannot be used as a boolean value")
 
-    def __getitem__(self, index: Any) -> torch.Tensor:
-        return Variable._unwrap(self)[index]
-
-    def _binary_op(self, op: str, other: Any):
-        self_val = Variable._unwrap(self)
-        other_val = Variable._unwrap(other)
-        return getattr(self_val, op)(other_val)
-
-    def _iop(self, op: str, other: Any):
-        if self.training:
-            getattr(self.population, op)(Variable._unwrap(other))
-        else:
-            getattr(self.global_best, op)(Variable._unwrap(other))
-        return self
-
-    __add__ = partialmethod(_binary_op, "__add__")
-    __sub__ = partialmethod(_binary_op, "__sub__")
-    __mul__ = partialmethod(_binary_op, "__mul__")
-    __truediv__ = partialmethod(_binary_op, "__truediv__")
-    __floordiv__ = partialmethod(_binary_op, "__floordiv__")
-    __pow__ = partialmethod(_binary_op, "__pow__")
-    __matmul__ = partialmethod(_binary_op, "__matmul__")
-    __mod__ = partialmethod(_binary_op, "__mod__")
-
-    __iadd__ = partialmethod(_iop, "__iadd__")
-    __isub__ = partialmethod(_iop, "__isub__")
-    __imul__ = partialmethod(_iop, "__imul__")
-    __itruediv__ = partialmethod(_iop, "__itruediv__")
-    __ifloordiv__ = partialmethod(_iop, "__ifloordiv__")
-    __ipow__ = partialmethod(_iop, "__ipow__")
-    __imatmul__ = partialmethod(_iop, "__imatmul__")
-    __imod__ = partialmethod(_iop, "__imod__")
-
-    def __radd__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val + Variable._unwrap(self)
-
-    def __rsub__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val - Variable._unwrap(self)
-
-    def __rmul__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val * Variable._unwrap(self)
-
-    def __rtruediv__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val / Variable._unwrap(self)
-
-    def __rfloordiv__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val // Variable._unwrap(self)
-
-    def __rpow__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val ** Variable._unwrap(self)
-
-    def __rmod__(self, other: Any) -> torch.Tensor:
-        other_val = Variable._unwrap(other)
-        return other_val % Variable._unwrap(self)
-
-    def __neg__(self) -> torch.Tensor:
-        return -Variable._unwrap(self)
-
-    def __pos__(self) -> torch.Tensor:
-        return Variable._unwrap(self)
-
-    def __abs__(self) -> torch.Tensor:
-        return abs(Variable._unwrap(self))
-
-    # --------------------------------------------------------------
-    # Torch function override
-    # --------------------------------------------------------------
-
-    def __torch_function__(
-        self,
-        func,
-        types: Iterable[type],
-        args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] | None = None,
-    ):
-        if kwargs is None:
-            kwargs = {}
-
-        args = tuple(Variable._unwrap(a) for a in args)
-        kwargs = {k: Variable._unwrap(v) for k, v in kwargs.items()}
-
-        return func(*args, **kwargs)
-
     # --------------------------------------------------------------
     # Properties
     # --------------------------------------------------------------
 
     @property
+    def value(self) -> torch.Tensor:
+        value = self.population if self.training else self.global_best
+        for p in reversed(self._var_parametrizations):
+            value = p.forward(value)
+        return value
+
+    @property
+    def latent_value(self) -> torch.Tensor:
+        return self.population if self.training else self.global_best
+
+    @property
     def bounds(self) -> torch.Tensor:
+        bounds = self._bounds
+        for p in reversed(self._var_parametrizations):
+            bounds = p.forward_bounds(bounds)
+        return bounds
+
+    @property
+    def latent_bounds(self) -> torch.Tensor:
         return self._bounds
 
     @bounds.setter
@@ -273,7 +265,7 @@ class Variable(nn.Module):
 
     @property
     def lower_bound(self) -> torch.Tensor:
-        return self._bounds[0]
+        return self.bounds[0]
 
     @lower_bound.setter
     def lower_bound(self, value: Optional[float | torch.Tensor]) -> None:
@@ -286,7 +278,7 @@ class Variable(nn.Module):
 
     @property
     def upper_bound(self) -> torch.Tensor:
-        return self._bounds[1]
+        return self.bounds[1]
 
     @upper_bound.setter
     def upper_bound(self, value: Optional[float | torch.Tensor]) -> None:
@@ -316,10 +308,3 @@ class Variable(nn.Module):
     @property
     def dtype(self) -> torch.dtype:
         return self.population.dtype
-
-    @property
-    def data(self) -> torch.Tensor:
-        if self.training:
-            return self.population
-        else:
-            return self.global_best
