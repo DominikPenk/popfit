@@ -1,100 +1,19 @@
-from typing import Any, Literal, Optional, Sequence
+from typing import Literal
 
 import torch
-import torch.nn as nn
 
-from ..core import Model, Variable
+from ..core import Model, Spec, Variable
 from .base import Optimizer
 
 
-class PSOVariable(Variable):
-    """
-    Curve parameter with PSO-specific attributes for Particle Swarm Optimization.
-
-    Extends Variable to include velocity and personal best tracking for PSO.
-
-    Args:
-        value (torch.Tensor): Initial parameter values.
-        bounds (tuple[torch.Tensor, torch.Tensor]): Lower and upper bounds for the parameter.
-        unit (str, optional): Unit of the parameter.
-        description (str, optional): Description of the parameter.
-        velocity (torch.Tensor, optional): Initial velocity for the parameter.
-        personal_best (torch.Tensor, optional): Initial personal best value.
-    """
-
-    def __init__(
-        self,
-        value: Optional[float | torch.Tensor] = None,
-        bounds: Optional[Sequence[Any] | torch.Tensor] = None,
-        *,
-        population: Optional[torch.Tensor] = None,
-        velocity: Optional[torch.Tensor] = None,
-        personal_best: Optional[torch.Tensor] = None,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-    ) -> None:
-        super().__init__(
-            value, bounds=bounds, population=population, dtype=dtype, device=device
-        )
-        velocity = torch.zeros_like(self.population) if velocity is None else velocity
-        personal_best = (
-            self.population.clone().detach()
-            if personal_best is None
-            else torch.as_tensor(personal_best, dtype=dtype, device=device)
-        )
-
-        if velocity.shape != self.population.shape:
-            raise ValueError(
-                f"velocity must have the same shape as value. {velocity.shape} vs. {self.population.shape}"
-            )
-
-        if personal_best.shape != self.population.shape:
-            raise ValueError(
-                f"personal_best must have the same shape as population. {personal_best.shape} vs. {self.population.shape}"
-            )
-
-        self.velocity = velocity
-        self.personal_best = nn.Buffer(self.population.clone())
-
-    @classmethod
-    def from_base_variable(
-        cls,
-        base: Variable,
-    ) -> "PSOVariable":
-        """
-        Create a PSOVariable from a base Variable.
-
-        Args:
-            base (Variable): The base parameter to convert.
-
-        Returns:
-            PSOVariable: The PSO-augmented parameter.
-        """
-        return cls(
-            value=base.optimal,
-            bounds=base.bounds,
-            population=base.population,
-            dtype=base.dtype,
-            device=base.device,
-        )
-
-    def to_base_variable(self):
-        """
-        Convert this PSOVariable back to a standard Variable.
-
-        Returns:
-            Variable: The parameter in the original (bounded) space.
-        """
-        return Variable(
-            value=self.optimal,
-            bounds=self.bounds,
-            population=self.population,
-            dtype=self.dtype,
-            device=self.device,
-        )
+class PSOSpec(Spec):
+    def __init__(self, variable: Variable) -> None:
+        velocity = torch.zeros_like(variable.population)
+        personal_best = variable.population.detach().clone()
+        super().__init__(velocity=velocity, personal_best=personal_best)
 
 
-class PSO(Optimizer[PSOVariable]):
+class PSO(Optimizer):
     """
     Simple Particle Swarm Optimization (PSO) optimizer for curve fitting.
 
@@ -108,8 +27,6 @@ class PSO(Optimizer[PSOVariable]):
         cognitive (float, optional): Cognitive (personal best) coefficient. Defaults to 1.5.
         social (float, optional): Social (global best) coefficient. Defaults to 1.7.
     """
-
-    VariableType = PSOVariable
 
     def __init__(
         self,
@@ -134,6 +51,11 @@ class PSO(Optimizer[PSOVariable]):
             float("inf"),
         )
 
+    def start_optimization(self) -> None:
+        super().start_optimization()
+        for variable in self.model.variables():
+            variable.spec += PSOSpec(variable)
+
     @torch.no_grad()
     def step(self, losses: torch.Tensor) -> float:
         if losses.ndim != 1:
@@ -148,11 +70,24 @@ class PSO(Optimizer[PSOVariable]):
         self._update_particles()
         return self.global_best_loss
 
+    def finalize_optimization(self) -> None:
+        for variable in self.model.variables():
+            vel = variable.spec.pop("velocity")
+            pb = variable.spec.pop("personal_best")
+            if not isinstance(vel, torch.Tensor):
+                raise RuntimeError(
+                    f"Expected spec member 'velocity' to be a torch.Tensor, got {type(vel)}"
+                )
+            if not isinstance(pb, torch.Tensor):
+                raise RuntimeError(
+                    f"Expected spec member 'personal_best' to be a torch.Tensor, got {type(pb)}"
+                )
+
     def reset(self) -> float:
         """Reset the optimizer to initial state."""
         self.personal_best_loss.fill_(float("inf"))
         self.global_best_loss = float("inf")
-        for variable in self.variables():
+        for variable in self.model.variables():
             variable.global_best.copy_(variable.population[0].detach().clone())
         return self.global_best_loss
 
@@ -171,24 +106,23 @@ class PSO(Optimizer[PSOVariable]):
             better_mask, losses, self.personal_best_loss
         )
 
-        for variable in self.variables():
+        for variable in self.model.variables():
             mask = self._expand_mask(better_mask, variable.population)
-            updated = torch.where(
-                mask, variable.population.detach(), variable.personal_best
+            variable.spec["personal_best"] = torch.where(
+                mask, variable.population.detach(), variable.spec["personal_best"]
             )
-            variable.personal_best.copy_(updated)
 
     def _update_particles(self) -> None:
-        for name, variables in self.named_variables():
+        for name, variables in self.model.named_variables():
             r1 = torch.rand_like(variables.population)
             r2 = torch.rand_like(variables.population)
-            cognitive = variables.personal_best - variables.population
+            cognitive = variables.spec["personal_best"] - variables.population
             social_target = self._broadcast_best(name, variables.population)
             social = social_target - variables.population
-            variables.velocity.mul_(self.inertia)
-            variables.velocity.add_(self.cognitive * r1 * cognitive)
-            variables.velocity.add_(self.social * r2 * social)
-            variables.population.add_(variables.velocity)
+            variables.spec["velocity"].mul_(self.inertia)
+            variables.spec["velocity"].add_(self.cognitive * r1 * cognitive)
+            variables.spec["velocity"].add_(self.social * r2 * social)
+            variables.population.add_(variables.spec["velocity"])
             variables.clamp_to_bounds()
 
     @staticmethod

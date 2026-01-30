@@ -1,86 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Sequence
+from typing import Literal, Optional
 
 import torch
-import torch.nn as nn
 
 from ..core.model import Model
-from ..core.variable import Variable
+from ..parametrization import SigmoidBounded
 from .base import Optimizer
 
 
-class MultistartVariable(Variable):
-    def __init__(
-        self,
-        value: Optional[float | torch.Tensor] = None,
-        bounds: Optional[Sequence[Any] | torch.Tensor] = None,
-        *,
-        population: Optional[torch.Tensor] = None,
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
-    ) -> None:
-        super().__init__(
-            value=value,
-            bounds=bounds,
-            population=population,
-            dtype=dtype,
-            device=device,
-            requires_grad=False,
-        )
-        self.mask = nn.Buffer(torch.all(torch.isfinite(self._bounds), dim=0))
-        self.z = nn.Parameter(self.theta_to_z(population))
-        pass
-
-    @classmethod
-    def from_base_variable(
-        cls: type[MultistartVariable], base: Variable
-    ) -> MultistartVariable:
-        return cls(
-            value=base.optimal,
-            bounds=base.bounds,
-            population=base.population,
-            dtype=base.dtype,
-            device=base.device,
-        )
-
-    def to_base_variable(self) -> Variable:
-        return Variable(
-            value=self.optimal,
-            bounds=self.bounds,
-            population=self.z_to_theta(),
-            dtype=self.dtype,
-            device=self.device,
-        )
-
-    def theta_to_z(self, theta: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-        if not torch.any(self.mask):
-            return theta
-
-        safe_lower = torch.where(self.mask, self.lower_bound, 0.0)
-        safe_upper = torch.where(self.mask, self.upper_bound, 1.0)
-        val = (theta - safe_lower) / (safe_upper - safe_lower)
-        val = torch.clamp(val, eps, 1.0 - eps)
-        val = torch.logit(val)
-        return torch.where(self.mask, val, theta)
-
-    def z_to_theta(self) -> torch.Tensor:
-        if not torch.any(self.mask):
-            return self.z
-
-        safe_lower = torch.where(self.mask, self.lower_bound, 0.0)
-        safe_upper = torch.where(self.mask, self.upper_bound, 1.0)
-        val = safe_lower + (safe_upper - safe_lower) * torch.sigmoid(self.z)
-        return torch.where(self.mask, val, self.z)
-
-    @property
-    def population(self) -> torch.Tensor:
-        return self.z_to_theta()
-
-
-class MultistartOptimizer(Optimizer[MultistartVariable]):
-    VariableType = MultistartVariable
-
+class MultistartOptimizer(Optimizer):
     def __init__(
         self,
         model: Model,
@@ -98,6 +27,19 @@ class MultistartOptimizer(Optimizer[MultistartVariable]):
         self._optimizer: Optional[torch.optim.Optimizer] = None
         self.optimizer_args = dict(optimizer_args)
         self.optimizer_args["lr"] = lr
+
+    def start_optimization(self) -> None:
+        super().start_optimization()
+        for variable in self.model.variables():
+            variable.push_parametrization(SigmoidBounded(variable.latent_bounds))
+
+    def finalize_optimization(self) -> None:
+        for variable in self.model.variables():
+            param = variable.pop_parametrization()
+            if not isinstance(param, SigmoidBounded):
+                raise RuntimeError(
+                    "Expected all variables to be parameterized with SigmoidBounded"
+                )
 
     def get_optimizer(self) -> torch.optim.Optimizer:
         return self.optimizer_cls(
