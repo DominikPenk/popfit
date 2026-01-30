@@ -6,10 +6,11 @@ import torch
 import torch.nn as nn
 
 from ..parametrization.base import Parametrization
+from .expression import Expression
 from .spec import Spec
 
 
-class Variable(nn.Module):
+class Variable(Expression):
     def __init__(
         self,
         value: Optional[float | torch.Tensor] = None,
@@ -18,7 +19,7 @@ class Variable(nn.Module):
         shape: Optional[torch.Size | tuple[int, ...]] = None,
         population: Optional[torch.Tensor] = None,
         dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
+        device: Optional[torch.device | str] = None,
         parametrization: Optional[Parametrization] = None,
         spec: Optional[Spec] = None,
         requires_grad: bool = True,
@@ -221,13 +222,6 @@ class Variable(nn.Module):
         return p
 
     # --------------------------------------------------------------
-    # Operators
-    # --------------------------------------------------------------
-
-    def __bool__(self):
-        raise RuntimeError("PopParameter cannot be used as a boolean value")
-
-    # --------------------------------------------------------------
     # Properties
     # --------------------------------------------------------------
 
@@ -237,6 +231,13 @@ class Variable(nn.Module):
         for p in reversed(self._var_parametrizations):
             value = p.forward(value)
         return value
+
+    @property
+    def is_leav(self) -> bool:
+        return True
+
+    def label(self) -> str:
+        return "var"
 
     @property
     def latent_value(self) -> torch.Tensor:
