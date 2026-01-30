@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from ..parametrization.base import Parametrization
+from .spec import Spec
 
 
 class Variable(nn.Module):
@@ -19,6 +20,7 @@ class Variable(nn.Module):
         dtype: Optional[torch.dtype] = None,
         device: Optional[torch.device] = None,
         parametrization: Optional[Parametrization] = None,
+        spec: Optional[Spec] = None,
         requires_grad: bool = True,
     ) -> None:
         super().__init__()
@@ -92,6 +94,8 @@ class Variable(nn.Module):
         self._var_parametrizations = nn.ModuleList()
         if parametrization:
             self.push_parametrization(parametrization)
+
+        self.spec = spec or Spec()
 
         self._initialized = True
 
@@ -299,7 +303,10 @@ class Variable(nn.Module):
 
     @property
     def optimal(self) -> torch.Tensor:
-        return self.global_best
+        value = self.global_best
+        for p in reversed(self._var_parametrizations):
+            value = p.forward(value)
+        return value
 
     @property
     def device(self) -> torch.device:
