@@ -15,6 +15,16 @@ _GEN = "cma_generation"
 
 
 class CMASpec(Spec):
+    """CMA-ES specific state for a single optimization variable.
+
+    This class stores all internal CMA-ES parameters for a variable, including
+    the mean vector, covariance matrix, step-size, evolution paths, and generation counter.
+
+    Args:
+        variable (Variable): The variable to optimize.
+        sigma (float, optional): Initial step-size. Defaults to 0.3.
+    """
+
     def __init__(self, variable: Variable, *, sigma: float = 0.3):
         _, *shape = variable.population.shape
         dim = int(torch.tensor(shape).prod())
@@ -37,6 +47,31 @@ class CMASpec(Spec):
 
 
 class BlockCMAES(Optimizer):
+    """Block-wise CMA-ES optimizer for population-based gradient-free optimization.
+
+    This optimizer implements the CMA-ES (Covariance Matrix Adaptation Evolution Strategy)
+    algorithm in a block-wise fashion, maintaining separate CMA states per variable.
+    It can handle invalid evaluations by resampling or ignoring them.
+
+    Args:
+        model (Model): The model containing Variables to optimize.
+        population_size (int, optional): Number of candidate solutions per generation. Default is 32.
+        sigma (float, optional): Initial global step-size. Default is 0.3.
+        invalid_handling (Literal["resample", "ignore"], optional): How to handle invalid solutions.
+            Defaults to "ignore".
+
+    Attributes:
+        lambda_ (int): Population size used internally (same as `population_size`).
+        mu (int): Number of elite individuals used to update mean.
+        weights (torch.Tensor): Recombination weights for elite individuals.
+        mu_eff (float): Effective number of parents.
+        sigma0 (float): Initial step-size.
+
+    References:
+        - Hansen, N., & Ostermeier, A. (2001). Completely derandomized self-adaptation in
+          evolution strategies. Evolutionary computation, 9(2), 159-195.
+    """
+
     def __init__(
         self,
         model: Model,
@@ -63,6 +98,10 @@ class BlockCMAES(Optimizer):
         self.sigma0 = sigma
 
     def start_optimization(self) -> None:
+        """Initialize the optimizer state for all Variables.
+
+        Adds a CMASpec to each Variable storing its CMA-ES parameters.
+        """
         super().start_optimization()
 
         for variable in self.model.variables():
@@ -70,6 +109,18 @@ class BlockCMAES(Optimizer):
 
     @torch.no_grad()
     def step(self, losses: torch.Tensor) -> float:
+        """Perform one CMA-ES generation step.
+
+        This method updates the internal CMA state (mean, covariance, step-size)
+        and samples a new population for the next generation.
+
+        Args:
+            losses (torch.Tensor): Tensor of shape `(population_size,)` containing the
+                evaluation losses of the current population.
+
+        Returns:
+            float: Best loss observed after this step.
+        """
         # Set invalid losses to infinity to avoid updating bests
         valid_mask = self.validate_population(losses)
         losses = torch.where(valid_mask, losses, float("inf"))
@@ -86,6 +137,10 @@ class BlockCMAES(Optimizer):
         return self.global_best_loss
 
     def finalize_optimization(self) -> None:
+        """Clean up internal CMA-ES state from all Variables.
+
+        Removes all CMASpec entries (_MEAN, _C, _SIGMA, _PC, _PS, _GEN) from each Variable.
+        """
         for variable in self.model.variables():
             variable.spec.pop(_MEAN)
             variable.spec.pop(_C)
@@ -96,6 +151,12 @@ class BlockCMAES(Optimizer):
 
     @torch.no_grad()
     def _update_variable(self, variable: Variable, elites: torch.Tensor) -> None:
+        """Update the CMA-ES internal state for a single Variable.
+
+        Args:
+            variable (Variable): The Variable to update.
+            elites (torch.Tensor): Indices of elite individuals in the population.
+        """
         spec = variable.spec
 
         # --------------------------------------------------
@@ -196,6 +257,11 @@ class BlockCMAES(Optimizer):
 
     @torch.no_grad()
     def _sample_variable(self, variable: Variable) -> None:
+        """Sample a new population for a Variable using its CMA-ES parameters.
+
+        Args:
+            variable (Variable): The Variable to sample new candidates for.
+        """
         spec = variable.spec
 
         mean: torch.Tensor = spec[_MEAN]
