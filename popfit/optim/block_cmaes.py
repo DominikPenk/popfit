@@ -85,6 +85,15 @@ class BlockCMAES(Optimizer):
             self._sample_variable(variable)
         return self.global_best_loss
 
+    def finalize_optimization(self) -> None:
+        for variable in self.model.variables():
+            variable.spec.pop(_MEAN)
+            variable.spec.pop(_C)
+            variable.spec.pop(_SIGMA)
+            variable.spec.pop(_PC)
+            variable.spec.pop(_PS)
+            variable.spec.pop(_GEN)
+
     @torch.no_grad()
     def _update_variable(self, variable: Variable, elites: torch.Tensor) -> None:
         spec = variable.spec

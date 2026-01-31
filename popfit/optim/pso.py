@@ -5,12 +5,18 @@ import torch
 from ..core import Model, Spec, Variable
 from .base import Optimizer
 
+_PB = "pso_pb"
+_VEL = "pso_vel"
+
 
 class PSOSpec(Spec):
     def __init__(self, variable: Variable) -> None:
-        velocity = torch.zeros_like(variable.population)
-        personal_best = variable.population.detach().clone()
-        super().__init__(velocity=velocity, personal_best=personal_best)
+        super().__init__(
+            **{
+                _PB: variable.population.detach().clone(),
+                _VEL: torch.zeros_like(variable.population),
+            }
+        )
 
 
 class PSO(Optimizer):
@@ -72,8 +78,8 @@ class PSO(Optimizer):
 
     def finalize_optimization(self) -> None:
         for variable in self.model.variables():
-            vel = variable.spec.pop("velocity")
-            pb = variable.spec.pop("personal_best")
+            vel = variable.spec.pop(_VEL)
+            pb = variable.spec.pop(_PB)
             if not isinstance(vel, torch.Tensor):
                 raise RuntimeError(
                     f"Expected spec member 'velocity' to be a torch.Tensor, got {type(vel)}"
@@ -108,22 +114,23 @@ class PSO(Optimizer):
 
         for variable in self.model.variables():
             mask = self._expand_mask(better_mask, variable.population)
-            variable.spec["personal_best"] = torch.where(
-                mask, variable.population.detach(), variable.spec["personal_best"]
+            variable.spec[_PB] = torch.where(
+                mask, variable.population.detach(), variable.spec[_PB]
             )
 
     def _update_particles(self) -> None:
-        for name, variables in self.model.named_variables():
-            r1 = torch.rand_like(variables.population)
-            r2 = torch.rand_like(variables.population)
-            cognitive = variables.spec["personal_best"] - variables.population
-            social_target = self._broadcast_best(name, variables.population)
-            social = social_target - variables.population
-            variables.spec["velocity"].mul_(self.inertia)
-            variables.spec["velocity"].add_(self.cognitive * r1 * cognitive)
-            variables.spec["velocity"].add_(self.social * r2 * social)
-            variables.population.add_(variables.spec["velocity"])
-            variables.clamp_to_bounds()
+        for name, variable in self.model.named_variables():
+            r1 = torch.rand_like(variable.population)
+            r2 = torch.rand_like(variable.population)
+            cognitive = variable.spec[_PB] - variable.population
+            social_target = self._broadcast_best(name, variable.population)
+            social = social_target - variable.population
+            vel: torch.Tensor = variable.spec[_VEL]
+            vel.mul_(self.inertia)
+            vel.add_(self.cognitive * r1 * cognitive)
+            vel.add_(self.social * r2 * social)
+            variable.population.add_(vel)
+            variable.clamp_to_bounds()
 
     @staticmethod
     def _expand_mask(mask: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
