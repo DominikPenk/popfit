@@ -77,7 +77,7 @@ print("Optimal x:", model.x.optimal.item())
 Clone the repository and install from source:
 
 ```bash
-git clone https://github.com/username/popfit.git
+git clone https://github.com/DominikPenk/popfit.git
 cd popfit
 pip install -e .
 ```
