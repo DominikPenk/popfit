@@ -1,4 +1,5 @@
 from .base import Optimizer
+from .differential_evolution import DifferentialEvolution
 from .multistart import (
     MultistartAdam,
     MultistartAdamW,
@@ -10,6 +11,7 @@ from .pso import PSO
 
 __all__ = [
     "Optimizer",
+    "DifferentialEvolution",
     "MultistartAdam",
     "MultistartAdamW",
     "MultistartGD",
