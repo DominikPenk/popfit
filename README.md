@@ -3,7 +3,7 @@
 **PopFit** is a PyTorch-based library for **population-based**, **multistart**, and **gradient-free optimization**.  
 It is designed for non-convex, noisy, or derivative-free problems by maintaining a population of candidate solutions and integrating evolutionary strategies directly into the PyTorch ecosystem.
 
-PopFit lets you optimize models using methods like **CMA-ES**, **multistart gradient descent**, and other population-based optimizers—without giving up PyTorch’s composability, devices, or tensor semantics.
+PopFit lets you optimize models using methods like **CMA-ES**, **multistart gradient descent**, and other population-based optimizers, without giving up PyTorch’s composability, devices, or tensor semantics.
 
 ---
 
