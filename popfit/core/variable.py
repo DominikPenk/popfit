@@ -187,7 +187,7 @@ class Variable(Expression):
         return value
 
     @property
-    def is_leav(self) -> bool:
+    def is_leaf(self) -> bool:
         return True
 
     def label(self) -> str:

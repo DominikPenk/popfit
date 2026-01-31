@@ -1,8 +1,10 @@
+import warnings
 from typing import Iterator, Optional
 
 import torch.nn as nn
 
 from . import init
+from .expression import Expression
 from .variable import Variable
 
 
@@ -17,7 +19,7 @@ def _reset_population(module: nn.Module, size: int) -> None:
 
 
 class Model(nn.Module):
-    def add_variable(self, name: str, variable: Optional[Variable]) -> None:
+    def register_variable(self, name: str, variable: Optional[Variable]) -> None:
         """Register a Variable as a submodule of the model.
 
         Args:
@@ -25,7 +27,7 @@ class Model(nn.Module):
             variable: The Variable to register.
         """
         if not isinstance(variable, Variable):
-            raise TypeError("variable must be an instance of Variable.")
+            raise TypeError("variable must be an instance of popfit.Variable.")
         self.add_module(name, variable)
 
     def named_variables(
@@ -101,6 +103,53 @@ class Model(nn.Module):
 
         setattr(parent, leaf_name, new_variable)
         return old
+
+    def add_expression(self, name: str, expression: Optional[Expression]) -> None:
+        if not isinstance(expression, Expression):
+            raise TypeError(
+                f"Expected a PopFit Expression for '{name}', but got {type(expression).__name__}. "
+                "Ensure your math operations use PopFit variables or expressions."
+            )
+        if isinstance(expression, Variable):
+            warnings.warn(
+                f"Variable '{name}' was added via 'add_expression'. "
+                "While functional, using 'add_variable' is preferred.",
+                stacklevel=2,
+            )
+        self.add_module(name, expression)
+
+    def named_expressions(
+        self,
+        memo: Optional[set[Expression]] = None,
+        remove_duplicates: bool = True,
+        recursive: bool = False,
+    ) -> Iterator[tuple[str, Expression]]:
+        if recursive:
+            # Yields everything PyTorch sees as a submodule
+            for name, module in self.named_modules(
+                memo=memo,  # pyright: ignore[reportArgumentType]
+                remove_duplicate=remove_duplicates,
+            ):
+                if isinstance(module, Expression):
+                    yield name, module
+        else:
+            memo = memo if memo is not None else set()
+            stack: list[tuple[str, nn.Module]] = [("", self)]
+            while stack:
+                prefix, module = stack.pop()
+                for name, child in module.named_children():
+                    full_name = f"{prefix}{name}"
+                    if isinstance(child, Expression):
+                        if remove_duplicates and child in memo:
+                            continue
+                        memo.add(child)
+                        yield full_name, child
+                    else:
+                        stack.append((full_name, child))
+
+    def expressions(self, recusive: bool = False) -> Iterator[Expression]:
+        for _, expr in self.named_expressions(recursive=recusive):
+            yield expr
 
     def reset_population(self, size: int) -> None:
         _reset_population(self, size)

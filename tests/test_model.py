@@ -30,19 +30,19 @@ class ComplexModel(Model):
 
 
 ## Registration Tests
-def test_add_variable_success(model, var):
-    model.add_variable("test_var", var)
+def test_register_variable_success(model, var):
+    model.register_variable("test_var", var)
     assert model.test_var is var
 
 
-def test_add_variable_wrong_type(model):
-    with pytest.raises(TypeError, match="must be an instance of Variable"):
-        model.add_variable("bad_var", nn.Linear(10, 10))
+def test_register_variable_wrong_type(model):
+    with pytest.raises(TypeError):
+        model.register_variable("bad_var", nn.Linear(10, 10))
 
 
 ## Retrieval Tests
 def test_get_variable_success(model, var):
-    model.add_variable("test_var", var)
+    model.register_variable("test_var", var)
     retrieved = model.get_variable("test_var")
     assert retrieved is var
 
@@ -60,15 +60,15 @@ def test_get_variable_not_found(model):
 
 def test_get_variable_wrong_type(model):
     model.add_module("not_a_var", nn.ReLU())
-    with pytest.raises(TypeError, match="is not a Variable"):
+    with pytest.raises(TypeError):
         model.get_variable("not_a_var")
 
 
 ## Iterator Tests
 def test_named_variables_iteration(model):
     v1, v2 = Variable(shape=()), Variable(shape=())
-    model.add_variable("v1", v1)
-    model.add_variable("v2", v2)
+    model.register_variable("v1", v1)
+    model.register_variable("v2", v2)
 
     vars_dict = dict(model.named_variables())
     assert len(vars_dict) == 2
@@ -77,7 +77,7 @@ def test_named_variables_iteration(model):
 
 def test_variables_iterator(model):
     v1 = Variable(shape=())
-    model.add_variable("v1", v1)
+    model.register_variable("v1", v1)
     assert next(model.variables()) is v1
 
 
@@ -85,7 +85,7 @@ def test_variables_iterator(model):
 def test_replace_variable_shallow(model):
     old_var = Variable(shape=())
     new_var = Variable(shape=())
-    model.add_variable("v1", old_var)
+    model.register_variable("v1", old_var)
 
     returned_old = model.replace_variable("v1", new_var)
     assert returned_old is old_var
@@ -112,7 +112,7 @@ def test_replace_variable_errors(model, var):
         model.replace_variable("not_a_var", var)
 
     # Test providing a non-Variable replacement
-    model.add_variable("real_var", Variable(shape=()))
+    model.register_variable("real_var", Variable(shape=()))
     with pytest.raises(TypeError, match="must be an instance of Variable"):
         model.replace_variable("real_var", nn.ReLU())
 

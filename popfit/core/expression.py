@@ -133,6 +133,7 @@ class Expression(nn.Module):
 
 class ConstantExpression(Expression):
     def __init__(self, value: torch.Tensor | float | int):
+        super().__init__()
         self.value_ = value
 
     @property
