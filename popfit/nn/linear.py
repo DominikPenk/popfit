@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..core import Model, Variable
+from ..core import Model, Variable, init
 
 
 class Linear(Model):
@@ -32,12 +32,12 @@ class Linear(Model):
 
     @torch.no_grad()
     def reset_population(self, size: int) -> None:
-        self.weight.empty(size)
+        init.empty_population(self.weight, num_samples=size)
         if self.bias is not None:
-            self.bias.empty(size)
+            init.empty_population(self.bias, num_samples=size)
 
         bound = math.sqrt(6.0 / (self.in_features + self.out_features))
-        nn.init.uniform_(self.weight.population.data, -bound, bound)
+        nn.init.uniform_(self.weight.population, -bound, bound)
 
         if self.bias is not None:
             bound = 1 / (self.in_features**0.5) if self.in_features > 0 else 0

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence, overload
+from typing import Any, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -46,9 +46,9 @@ class Variable(Expression):
                 "Could not infer variable shape at least one of value, shape, population, or bounds must be provided"
             )
 
-        main_source, self._var_shape = next(iter(inferred_shapes.items()))
+        main_source, var_shape = next(iter(inferred_shapes.items()))
         for source, shape in inferred_shapes.items():
-            if shape != self._var_shape:
+            if shape != var_shape:
                 raise ValueError(
                     f"Shape of {source} does not match {main_source}. {shape} vs. {self._var_shape}"
                 )
@@ -56,15 +56,15 @@ class Variable(Expression):
         # Set bounds
         if bounds is not None:
             b_tensor = torch.as_tensor(bounds, dtype=dtype, device=device)
-            if b_tensor.shape == (2, *self._var_shape):
+            if b_tensor.shape == (2, *var_shape):
                 low, high = b_tensor[0], b_tensor[1]
             else:
                 # Try to broadcast (e.g., user passed tuple of two floats or two tensors)
                 low = torch.as_tensor(bounds[0], dtype=dtype, device=device).expand(
-                    self._var_shape
+                    var_shape
                 )
                 high = torch.as_tensor(bounds[1], dtype=dtype, device=device).expand(
-                    self._var_shape
+                    var_shape
                 )
 
             if torch.any(low > high):
@@ -72,8 +72,8 @@ class Variable(Expression):
                     "Upper bound must be greater than or equal to lower bound for all elements."
                 )
         else:
-            low = torch.full(self._var_shape, float("-inf"), dtype=dtype, device=device)
-            high = torch.full(self._var_shape, float("inf"), dtype=dtype, device=device)
+            low = torch.full(var_shape, float("-inf"), dtype=dtype, device=device)
+            high = torch.full(var_shape, float("inf"), dtype=dtype, device=device)
         self._bounds = nn.Buffer(torch.stack([low, high], dim=0))
 
         if value is not None:
@@ -84,7 +84,7 @@ class Variable(Expression):
         pop_tensor = (
             torch.as_tensor(population, dtype=dtype, device=device)
             if population is not None
-            else torch.empty((0, *self._var_shape), dtype=dtype, device=device)
+            else torch.empty((0, *var_shape), dtype=dtype, device=device)
         )
 
         self.global_best = nn.Buffer(value_tensor)
@@ -105,52 +105,6 @@ class Variable(Expression):
         mid = torch.where(torch.isfinite(mid), mid, torch.zeros_like(mid))
         mid = mid.clamp_(min=self._bounds[0], max=self._bounds[1])
         return mid
-
-    @classmethod
-    def from_base_variable(
-        cls: type[Variable],
-        base_variable: Variable,
-    ) -> Variable:
-        if cls is not Variable:
-            raise NotImplementedError(
-                "from_base_variable must be implemented by subclasses."
-            )
-        return base_variable
-
-    def to_base_variable(self) -> Variable:
-        if type(self) is not Variable:
-            raise NotImplementedError(
-                "to_base_variable must be implemented by subclasses."
-            )
-        return self
-
-    @overload
-    def sample_uniform(self, *, mask: torch.Tensor) -> None: ...
-
-    @overload
-    def sample_uniform(self, *, num_samples: int) -> None: ...
-
-    def sample_uniform(
-        self, *, num_samples: Optional[int] = None, mask: Optional[torch.Tensor] = None
-    ) -> None:
-        if num_samples is None and mask is None:
-            raise RuntimeError("At least one of num_samples and mask must be None")
-
-        num_samples = num_samples if num_samples is not None else self.population_size
-
-        low, high = self._bounds[0], self._bounds[1]
-        dist = torch.distributions.Uniform(low, high)
-        samples = dist.sample((num_samples,))
-
-        if mask is not None:
-            self.population.data[mask] = samples[mask]
-        else:
-            self.population.data = samples
-
-    def empty(self, num_samples: int) -> None:
-        self.population.data = torch.empty(
-            (num_samples, *self._var_shape), dtype=self.dtype, device=self.device
-        )
 
     def clamp_to_bounds(self, clamp_best: bool = False) -> None:
         self.population.data.clamp_(min=self._bounds[0], max=self._bounds[1])
@@ -247,7 +201,7 @@ class Variable(Expression):
     def bounds(self) -> torch.Tensor:
         bounds = self._bounds
         for p in reversed(self._var_parametrizations):
-            bounds = p.forward_bounds(bounds)
+            bounds = p.forward_bounds(bounds)  # type: ignore[reportCallIssue]
         return bounds
 
     @property
@@ -262,9 +216,9 @@ class Variable(Expression):
             return
 
         bounds_tensor = torch.as_tensor(value, dtype=self.dtype, device=self.device)
-        if bounds_tensor.shape != (2, *self._var_shape):
+        if bounds_tensor.shape != (2, *self.shape):
             raise ValueError(
-                f"Expected bound of shape {2, *self._var_shape} got {bounds_tensor.shape}"
+                f"Expected bound of shape {2, *self.shape} got {bounds_tensor.shape}"
             )
         self._bounds = bounds_tensor
 
@@ -299,8 +253,8 @@ class Variable(Expression):
         return self.population.shape[0]
 
     @property
-    def var_shape(self) -> torch.Size:
-        return self._var_shape
+    def shape(self) -> torch.Size:
+        return self.global_best.shape
 
     @property
     def optimal(self) -> torch.Tensor:

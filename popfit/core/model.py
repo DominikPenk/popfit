@@ -2,6 +2,7 @@ from typing import Iterator, Optional
 
 import torch.nn as nn
 
+from . import init
 from .variable import Variable
 
 
@@ -10,7 +11,7 @@ def _reset_population(module: nn.Module, size: int) -> None:
         if hasattr(child, "reset_population"):
             child.reset_population(size)  # type: ignore
         elif isinstance(child, Variable):
-            child.sample_uniform(num_samples=size)
+            init.uniform_population(child, num_samples=size)
         else:
             _reset_population(child, size)
 

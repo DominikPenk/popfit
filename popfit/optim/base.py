@@ -2,7 +2,7 @@ from typing import Literal, Self
 
 import torch
 
-from ..core import Model
+from ..core import Model, init
 
 
 class Optimizer:
@@ -54,7 +54,7 @@ class Optimizer:
         if self.invalid_handling == "resample":
             invalid_mask = ~valid_mask
             for variable in self.model.variables():
-                variable.sample_uniform(mask=invalid_mask)
+                init.uniform_population(variable, mask=invalid_mask)
         return valid_mask
 
     def update_global_best(self, losses: torch.Tensor) -> None:
