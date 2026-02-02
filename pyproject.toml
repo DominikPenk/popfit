@@ -25,8 +25,8 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = ["pytest"]
 
-[tool.setuptools]
-packages = ["popfit"]
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.setuptools.dynamic]
 version = {attr = "popfit._version.__version__"}
