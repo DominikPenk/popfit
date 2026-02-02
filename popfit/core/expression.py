@@ -12,6 +12,10 @@ class Expression(nn.Module):
         raise NotImplementedError
 
     @property
+    def optimal(self) -> torch.Tensor:
+        raise NotImplementedError
+
+    @property
     def is_leaf(self) -> bool:
         raise NotImplementedError
 
@@ -145,6 +149,10 @@ class ConstantExpression(Expression):
         return self.value_
 
     @property
+    def optimal(self):
+        return self.value_
+
+    @property
     def label(self):
         return str(self.value_)
 
@@ -175,6 +183,11 @@ class AddExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value + self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal + self.b.optimal
+
+    @property
     def label(self) -> str:
         return "+"
 
@@ -184,6 +197,11 @@ class SubExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value - self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal - self.b.optimal
+
+    @property
     def label(self) -> str:
         return "-"
 
@@ -193,6 +211,11 @@ class MulExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value * self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal * self.b.optimal
+
+    @property
     def label(self) -> str:
         return "*"
 
@@ -202,6 +225,11 @@ class TrueDivExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value / self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal / self.b.optimal
+
+    @property
     def label(self) -> str:
         return "/"
 
@@ -211,6 +239,11 @@ class DivExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value // self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal // self.b.optimal
+
+    @property
     def label(self) -> str:
         return "//"
 
@@ -220,6 +253,11 @@ class LessExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value < self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal < self.b.optimal
+
+    @property
     def label(self) -> str:
         return "<"
 
@@ -229,6 +267,11 @@ class LessEqualExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value <= self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal <= self.b.optimal
+
+    @property
     def label(self) -> str:
         return "<="
 
@@ -238,6 +281,11 @@ class GreaterExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value > self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal > self.b.optimal
+
+    @property
     def label(self) -> str:
         return ">"
 
@@ -247,6 +295,11 @@ class GreaterEqualExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value >= self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal >= self.b.optimal
+
+    @property
     def label(self) -> str:
         return ">="
 
@@ -256,6 +309,11 @@ class PowExpression(BinaryExpression):
     def value(self) -> torch.Tensor:
         return self.a.value**self.b.value
 
+    @property
+    def optimal(self) -> torch.Tensor:
+        return self.a.optimal**self.b.optimal
+
+    @property
     def label(self) -> str:
         return "^"
 
@@ -270,9 +328,14 @@ class NegExpression(Expression):
         return -self.a.value
 
     @property
+    def optimal(self) -> torch.Tensor:
+        return -self.a.optimal
+
+    @property
     def is_leaf(self) -> bool:
         return False
 
+    @property
     def label(self) -> str:
         return "-"
 
@@ -290,9 +353,14 @@ class AbsExpression(Expression):
         return abs(self.a.value)
 
     @property
+    def optimal(self) -> torch.Tensor:
+        return abs(self.a.optimal)
+
+    @property
     def is_leaf(self) -> bool:
         return False
 
+    @property
     def label(self) -> str:
         return "abs"
 
