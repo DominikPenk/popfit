@@ -1,5 +1,5 @@
 import math
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import torch
 
@@ -12,6 +12,114 @@ _SIGMA = "cma_sigma"
 _PC = "cma_pc"
 _PS = "cma_ps"
 _GEN = "cma_generation"
+
+
+class CMAState(NamedTuple):
+    mean: torch.Tensor
+    C: torch.Tensor
+    sigma: torch.Tensor
+    pc: torch.Tensor
+    ps: torch.Tensor
+
+
+def _update_distribution(
+    *,
+    mean: torch.Tensor,
+    C: torch.Tensor,
+    sigma: torch.Tensor,
+    pc: torch.Tensor,
+    ps: torch.Tensor,
+    X: torch.Tensor,
+    weights: torch.Tensor,
+    mu_eff: float,
+) -> CMAState:
+    d = mean.numel()
+
+    # --- mean update ---
+    new_mean = torch.sum(weights[:, None] * X, dim=0)
+    y = (new_mean - mean) / sigma
+
+    # --- strategy parameters ---
+    c_sigma = (mu_eff + 2.0) / (d + mu_eff + 5.0)
+    c_c = (4.0 + mu_eff / d) / (d + 4.0 + 2.0 * mu_eff / d)
+
+    # --- p_sigma ---
+    eps = 1e-12
+    L = torch.linalg.cholesky(C + eps * torch.eye(d, device=C.device, dtype=C.dtype))
+
+    C_inv_sqrt_y = torch.linalg.solve_triangular(
+        L, y.unsqueeze(1), upper=False
+    ).squeeze(1)
+
+    ps = (1.0 - c_sigma) * ps + math.sqrt(
+        c_sigma * (2.0 - c_sigma) * mu_eff
+    ) * C_inv_sqrt_y
+
+    # --- p_c ---
+    pc = (1.0 - c_c) * pc + math.sqrt(c_c * (2.0 - c_c) * mu_eff) * y
+
+    # --- covariance ---
+    artmp = (X - mean) / sigma
+
+    c1 = 2.0 / ((d + 1.3) ** 2 + mu_eff)
+    c_mu = min(
+        1.0 - c1,
+        2.0 * (mu_eff - 2.0 + 1.0 / mu_eff) / ((d + 2.0) ** 2 + mu_eff),
+    )
+
+    rank_mu = torch.sum(
+        weights[:, None, None] * torch.einsum("ni,nj->nij", artmp, artmp),
+        dim=0,
+    )
+
+    C = (1.0 - c1 - c_mu) * C + c1 * torch.outer(pc, pc) + c_mu * rank_mu
+    C = 0.5 * (C + C.T)
+
+    # --- step size ---
+    chi_n = math.sqrt(d) * (1.0 - 1.0 / (4.0 * d) + 1.0 / (21.0 * d * d))
+    d_sigma = 1.0 + 2.0 * max(0.0, math.sqrt((mu_eff - 1.0) / (d + 1.0)) - 1.0)
+
+    sigma = sigma * torch.exp(
+        (c_sigma / d_sigma) * (torch.norm(ps) / chi_n - 1.0)
+    ).clamp(1e-12, 1e3)
+
+    return CMAState(
+        mean=new_mean,
+        C=C,
+        sigma=sigma,
+        pc=pc,
+        ps=ps,
+    )
+
+
+def _sample_distribution(
+    size: int,
+    mean: torch.Tensor,
+    C: torch.Tensor,
+    sigma: torch.Tensor,
+) -> torch.Tensor:
+    # Flatten mean to match covariance dimension
+    mean_flat = mean.flatten()
+    d = mean_flat.numel()
+
+    # Numerical safety for Cholesky
+    eps = 1e-12
+    L = torch.linalg.cholesky(C + eps * torch.eye(d, device=C.device, dtype=C.dtype))
+
+    # Sample standard normal
+    z = torch.randn(
+        (size, d),
+        device=mean.device,
+        dtype=mean.dtype,
+    )
+
+    # Transform samples
+    y = z @ L.T  # (λ, d)
+    x = mean_flat + sigma * y  # (λ, d)
+
+    # Reshape back to variable shape
+    x = x.view(size, *mean.shape)
+    return x
 
 
 class CMASpec(Spec):
@@ -93,7 +201,7 @@ class BlockCMAES(Optimizer):
         self.weights = weights.max() - weights
         self.weights /= self.weights.sum()
 
-        self.mu_eff = 1.0 / torch.sum(self.weights**2)
+        self.mu_eff = 1.0 / torch.sum(self.weights**2).item()
 
         self.sigma0 = sigma
 
@@ -159,100 +267,31 @@ class BlockCMAES(Optimizer):
         """
         spec = variable.spec
 
-        # --------------------------------------------------
-        # Pull and flatten state
-        # --------------------------------------------------
-        mean = spec[_MEAN].flatten()  # (d,)
-        C = spec[_C]  # (d, d)
-        sigma = spec[_SIGMA]  # scalar tensor
+        mean = spec[_MEAN].flatten()
+        C = spec[_C]
+        sigma = spec[_SIGMA]
         pc = spec[_PC]
         ps = spec[_PS]
 
         d = mean.numel()
-
-        # --------------------------------------------------
-        # Elite samples
-        # --------------------------------------------------
         X = variable.population[elites].reshape(self.mu, d)
 
-        # --------------------------------------------------
-        # Recombination (new mean)
-        # --------------------------------------------------
-        new_mean = torch.sum(self.weights[:, None] * X, dim=0)
-
-        # Normalized mean step
-        y = (new_mean - mean) / sigma
-
-        # --------------------------------------------------
-        # Strategy parameters
-        # --------------------------------------------------
-        c_sigma = (self.mu_eff + 2.0) / (d + self.mu_eff + 5.0)
-        c_c = (4.0 + self.mu_eff / d) / (d + 4.0 + 2.0 * self.mu_eff / d)
-
-        # --------------------------------------------------
-        # p_sigma update (step-size path)
-        # --------------------------------------------------
-        eps = 1e-12
-        L = torch.linalg.cholesky(
-            C + eps * torch.eye(d, device=C.device, dtype=C.dtype)
+        state = _update_distribution(
+            mean=mean,
+            C=C,
+            sigma=sigma,
+            pc=pc,
+            ps=ps,
+            X=X,
+            weights=self.weights,
+            mu_eff=self.mu_eff,
         )
 
-        C_inv_sqrt_y = torch.linalg.solve_triangular(
-            L,
-            y.unsqueeze(1),  # (d, 1)
-            upper=False,
-        ).squeeze(1)  # (d,)
-
-        ps = (1.0 - c_sigma) * ps + math.sqrt(
-            c_sigma * (2.0 - c_sigma) * self.mu_eff
-        ) * C_inv_sqrt_y
-
-        # --------------------------------------------------
-        # p_c update (covariance path)
-        # --------------------------------------------------
-        pc = (1.0 - c_c) * pc + math.sqrt(c_c * (2.0 - c_c) * self.mu_eff) * y
-
-        # --------------------------------------------------
-        # Covariance matrix update
-        # --------------------------------------------------
-        artmp = (X - mean) / sigma
-
-        c1 = 2.0 / ((d + 1.3) ** 2 + self.mu_eff)
-        c_mu = min(
-            1.0 - c1,
-            2.0
-            * (self.mu_eff - 2.0 + 1.0 / self.mu_eff)
-            / ((d + 2.0) ** 2 + self.mu_eff),
-        )
-
-        rank_mu = torch.sum(
-            self.weights[:, None, None] * torch.einsum("ni,nj->nij", artmp, artmp),
-            dim=0,
-        )
-
-        C = (1.0 - c1 - c_mu) * C + c1 * torch.outer(pc, pc) + c_mu * rank_mu
-
-        # Enforce symmetry (numerical safety)
-        C = 0.5 * (C + C.T)
-
-        # --------------------------------------------------
-        # Step-size update
-        # --------------------------------------------------
-        chi_n = math.sqrt(d) * (1.0 - 1.0 / (4.0 * d) + 1.0 / (21.0 * d * d))
-
-        d_sigma = 1.0 + 2.0 * max(0.0, math.sqrt((self.mu_eff - 1.0) / (d + 1.0)) - 1.0)
-
-        sigma = sigma * torch.exp((c_sigma / d_sigma) * (torch.norm(ps) / chi_n - 1.0))
-        sigma = sigma.clamp(min=1e-12, max=1e3)
-
-        # --------------------------------------------------
-        # Write back state
-        # --------------------------------------------------
-        spec[_MEAN] = new_mean.view_as(spec[_MEAN])
-        spec[_C] = C
-        spec[_SIGMA] = sigma
-        spec[_PC] = pc
-        spec[_PS] = ps
+        spec[_MEAN] = state.mean.view_as(spec[_MEAN])
+        spec[_C] = state.C
+        spec[_SIGMA] = state.sigma
+        spec[_PC] = state.pc
+        spec[_PS] = state.ps
         spec[_GEN] += 1
 
     @torch.no_grad()
@@ -264,33 +303,9 @@ class BlockCMAES(Optimizer):
         """
         spec = variable.spec
 
-        mean: torch.Tensor = spec[_MEAN]
-        C: torch.Tensor = spec[_C]
-        sigma: torch.Tensor = spec[_SIGMA]
-
-        # Flatten mean to match covariance dimension
-        mean_flat = mean.flatten()
-        d = mean_flat.numel()
-
-        # Numerical safety for Cholesky
-        eps = 1e-12
-        L = torch.linalg.cholesky(
-            C + eps * torch.eye(d, device=C.device, dtype=C.dtype)
+        x = _sample_distribution(
+            size=self.population_size, mean=spec[_MEAN], C=spec[_C], sigma=spec[_SIGMA]
         )
-
-        # Sample standard normal
-        z = torch.randn(
-            (self.population_size, d),
-            device=variable.device,
-            dtype=variable.dtype,
-        )
-
-        # Transform samples
-        y = z @ L.T  # (λ, d)
-        x = mean_flat + sigma * y  # (λ, d)
-
-        # Reshape back to variable shape
-        x = x.view(self.population_size, *mean.shape)
 
         variable.population.copy_(x)
         variable.clamp_to_bounds()
