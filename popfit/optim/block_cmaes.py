@@ -211,9 +211,13 @@ class BlockCMAES(Optimizer):
         Adds a CMASpec to each Variable storing its CMA-ES parameters.
         """
         super().start_optimization()
+        device: torch.device | None = None
 
         for variable in self.model.variables():
             variable.spec += CMASpec(variable, sigma=self.sigma0)
+            if device is None:
+                device = variable.device
+        self.weights = self.weights.to(device)
 
     @torch.no_grad()
     def step(self, losses: torch.Tensor) -> float:
