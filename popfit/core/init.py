@@ -44,9 +44,15 @@ def populate_variable(
         global_best = torch.as_tensor(global_best, device=device, dtype=dtype)
 
     with torch.no_grad():
-        variable.population.data = population
+        if mask is None and population.shape != variable.population.shape:
+            requires_grad = variable.population.requires_grad
+            variable.population = torch.nn.Parameter(
+                population, requires_grad=requires_grad
+            )
+        else:
+            variable.population.copy_(population)
         if global_best is not None:
-            variable.global_best.data = global_best
+            variable.global_best.copy_(global_best)
 
 
 def empty_population(
