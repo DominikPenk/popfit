@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Literal, Optional
 
 import torch
@@ -7,6 +8,8 @@ import torch
 from ..core.model import Model
 from ..parametrization import SigmoidBounded
 from .base import Optimizer
+
+logger = logging.getLogger(__name__)
 
 
 class MultistartOptimizer(Optimizer):
@@ -28,12 +31,20 @@ class MultistartOptimizer(Optimizer):
         self.optimizer_args = dict(optimizer_args)
         self.optimizer_args["lr"] = lr
 
+        logger.debug(
+            "Initialized %s with base optimizer=%s, lr=%.3g",
+            self.__class__.__name__,
+            optimizer_cls.__name__,
+            lr,
+        )
+
     def start_optimization(self) -> None:
         super().start_optimization()
         for variable in self.model.variables():
             variable.push_parametrization(SigmoidBounded(variable.latent_bounds))
 
     def finalize_optimization(self) -> None:
+        super().finalize_optimization()
         for variable in self.model.variables():
             param = variable.pop_parametrization()
             if not isinstance(param, SigmoidBounded):
@@ -42,6 +53,11 @@ class MultistartOptimizer(Optimizer):
                 )
 
     def get_optimizer(self) -> torch.optim.Optimizer:
+        logger.debug(
+            "%s: creating internal %s optimizer",
+            self.__class__.__name__,
+            self.optimizer_cls.__name__,
+        )
         return self.optimizer_cls(
             self.model.parameters(),
             **self.optimizer_args,

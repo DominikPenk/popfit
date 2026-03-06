@@ -1,3 +1,4 @@
+import logging
 import warnings
 from typing import Iterator, Optional
 
@@ -6,6 +7,8 @@ import torch.nn as nn
 from . import init
 from .expression import Expression
 from .variable import Variable
+
+logger = logging.getLogger(__name__)
 
 
 def _reset_population(module: nn.Module, size: int) -> None:
@@ -29,6 +32,9 @@ class Model(nn.Module):
         if not isinstance(variable, Variable):
             raise TypeError("variable must be an instance of popfit.Variable.")
         self.add_module(name, variable)
+        logger.info(
+            "Registered variable '%s' (type: %s)", name, type(variable).__name__
+        )
 
     def named_variables(
         self,
@@ -102,6 +108,12 @@ class Model(nn.Module):
             raise TypeError(f"The module '{name}' is not a Variable.")
 
         setattr(parent, leaf_name, new_variable)
+        logger.info(
+            "Replaced variable '%s'. Old ID: %s -> New ID: %s",
+            name,
+            id(old),
+            id(new_variable),
+        )
         return old
 
     def add_expression(self, name: str, expression: Optional[Expression]) -> None:
@@ -115,6 +127,10 @@ class Model(nn.Module):
                 f"Variable '{name}' was added via 'add_expression'. "
                 "While functional, using 'add_variable' is preferred.",
                 stacklevel=2,
+            )
+            logger.warning(
+                "Variable '%s' added via add_expression. Consider using add_variable instead.",
+                name,
             )
         self.add_module(name, expression)
 
@@ -152,4 +168,6 @@ class Model(nn.Module):
             yield expr
 
     def reset_population(self, size: int) -> None:
+        logger.info("Starting population reset for model. Target size: %d", size)
         _reset_population(self, size)
+        logger.debug("Population reset complete.")

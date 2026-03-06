@@ -1,3 +1,4 @@
+import logging
 from typing import Literal
 
 import torch
@@ -7,6 +8,8 @@ from .base import Optimizer
 
 _PB = "pso_pb"
 _VEL = "pso_vel"
+
+logger = logging.getLogger(__name__)
 
 
 class PSOSpec(Spec):
@@ -57,6 +60,15 @@ class PSO(Optimizer):
             float("inf"),
         )
 
+        logger.debug(
+            "Initialized PSO optimizer: inertia=%.3f, "
+            "cognitive=%.3f, social=%.3f, invalid_handling=%s",
+            inertia,
+            cognitive,
+            social,
+            invalid_handling,
+        )
+
     def start_optimization(self) -> None:
         super().start_optimization()
         for variable in self.model.variables():
@@ -91,6 +103,7 @@ class PSO(Optimizer):
 
     def reset(self) -> float:
         """Reset the optimizer to initial state."""
+        logger.debug("Resetting PSO optimizer state")
         self.personal_best_loss.fill_(float("inf"))
         self.global_best_loss = float("inf")
         for variable in self.model.variables():
@@ -105,8 +118,15 @@ class PSO(Optimizer):
             self.personal_best_loss = self.personal_best_loss.to(losses.device)
 
         better_mask = losses < self.personal_best_loss
-        if not torch.any(better_mask):
+        num_improved = better_mask.sum().item()
+        if num_improved == 0:
             return
+
+        logger.debug(
+            "Personal best updated for %d/%d particles",
+            num_improved,
+            losses.numel(),
+        )
 
         self.personal_best_loss = torch.where(
             better_mask, losses, self.personal_best_loss

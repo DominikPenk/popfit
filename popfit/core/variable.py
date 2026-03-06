@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional, Sequence
 
 import torch
@@ -8,6 +9,8 @@ import torch.nn as nn
 from ..parametrization.base import Parametrization
 from .expression import Expression
 from .spec import Spec
+
+logger = logging.getLogger(__name__)
 
 
 class Variable(Expression):
@@ -100,6 +103,23 @@ class Variable(Expression):
 
         self._initialized = True
 
+    def __str__(self) -> str:
+        shape_str = f"shape={tuple(self.shape)}"
+        return f"Variable({shape_str}, device='{self.device.type}')"
+
+    def __repr__(self) -> str:
+        """Technical representation for debugging."""
+        p_count = len(self._var_parametrizations)
+        param_str = f", parametrizations={p_count}" if p_count > 0 else ""
+
+        return (
+            f"Variable("
+            f"shape={tuple(self.shape)}, "
+            f"device='{self.device}', "
+            f"dtype={self.dtype}"
+            f"{param_str})"
+        )
+
     def get_domain_center(self):
         mid = 0.5 * self._bounds.sum(dim=0)
         mid = torch.where(torch.isfinite(mid), mid, torch.zeros_like(mid))
@@ -110,6 +130,11 @@ class Variable(Expression):
         self.population.data.clamp_(min=self._bounds[0], max=self._bounds[1])
         if clamp_best:
             self.global_best.clamp_(min=self._bounds[0], max=self._bounds[1])
+        logger.debug(
+            "Clamped variable to bounds [%s, %s]",
+            self._bounds[0],
+            self._bounds[1],
+        )
 
     # --------------------------------------------------------------
     # Parametrization
@@ -143,6 +168,11 @@ class Variable(Expression):
             self._bounds.copy_(new_bounds)
             self._var_parametrizations.append(parametrization)
 
+        logger.debug(
+            "Applied parametrization %s",
+            parametrization.__class__.__name__,
+        )
+
     def pop_parametrization(self) -> Parametrization:
         if len(self._var_parametrizations) == 0:
             raise RuntimeError(
@@ -172,6 +202,7 @@ class Variable(Expression):
             self.population.copy_(new_pop)
             self.global_best.copy_(new_best)
             self._bounds.copy_(new_bounds)
+        logger.debug("Removed parametrization %s", p.__class__.__name__)
 
         return p
 

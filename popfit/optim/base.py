@@ -1,8 +1,11 @@
+import logging
 from typing import Literal, Self
 
 import torch
 
 from ..core import Model, init
+
+logger = logging.getLogger(__name__)
 
 
 class Optimizer:
@@ -18,6 +21,13 @@ class Optimizer:
         self.global_best_loss = float("inf")
         self.invalid_handling = invalid_handling
 
+        logger.debug(
+            "Initialized %s optimizer: population_size=%d, invalid_handling=%s",
+            self.__class__.__name__,
+            population_size,
+            invalid_handling,
+        )
+
     def __enter__(self) -> Self:
         self.start_optimization()
         return self
@@ -29,7 +39,7 @@ class Optimizer:
         self.model.reset_population(self.population_size)
 
     def finalize_optimization(self) -> None:
-        pass
+        logger.debug("%s: finalizing optimization", self.__class__.__name__)
 
     def step(self, losses: torch.Tensor) -> None:
         raise NotImplementedError("This method should be implemented by subclasses.")
@@ -51,7 +61,16 @@ class Optimizer:
         if torch.all(valid_mask):
             return valid_mask
 
+        invalid_count = (~valid_mask).sum().item()
+        logger.debug(
+            "%s: %d/%d invalid particles detected",
+            self.__class__.__name__,
+            invalid_count,
+            self.population_size,
+        )
+
         if self.invalid_handling == "resample":
+            logger.debug("%s: resampling invalid particles", self.__class__.__name__)
             invalid_mask = ~valid_mask
             for variable in self.model.variables():
                 init.uniform_population(variable, mask=invalid_mask)
@@ -66,7 +85,16 @@ class Optimizer:
         save_losses = torch.where(torch.isfinite(losses), losses, float("inf"))
         current_best_loss, current_idx = torch.min(save_losses, dim=0)
         if current_best_loss.item() < self.global_best_loss:
+            prev = self.global_best_loss
             self.global_best_loss = current_best_loss.item()
+
+            logger.debug(
+                "%s: new global best %.6g (improved from %.6g)",
+                self.__class__.__name__,
+                self.global_best_loss,
+                prev,
+            )
+
             for variable in self.model.variables():
                 best_value = variable.population[current_idx].detach().clone()
                 variable.global_best.copy_(best_value)

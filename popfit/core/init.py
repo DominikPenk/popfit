@@ -1,8 +1,11 @@
+import logging
 from typing import Optional
 
 import torch
 
 from popfit.core.variable import Variable
+
+logger = logging.getLogger(__name__)
 
 
 def populate_variable(
@@ -38,6 +41,7 @@ def populate_variable(
 
     population = torch.as_tensor(population, dtype=dtype, device=device)
     if mask is not None:
+        logger.debug("Applying mask to population update for variable %s", variable)
         population[~mask] = variable.population[~mask]
 
     if global_best is not None:
@@ -45,11 +49,17 @@ def populate_variable(
 
     with torch.no_grad():
         if mask is None and population.shape != variable.population.shape:
+            logger.info(
+                "Reallocating population for variable %s. New shape: %s",
+                variable,
+                population.shape,
+            )
             requires_grad = variable.population.requires_grad
             variable.population = torch.nn.Parameter(
                 population, requires_grad=requires_grad
             )
         else:
+            logger.debug("In-place population copy for variable %s", variable)
             variable.population.copy_(population)
         if global_best is not None:
             variable.global_best.copy_(global_best)
@@ -90,6 +100,7 @@ def uniform_population(
     if not torch.all(torch.isfinite(variable.latent_bounds)):
         raise ValueError("uniform_population only supported for bounded variables")
     num_samples = num_samples or variable.population_size
+    logger.info("Initializing %d uniform samples for %s", num_samples, variable)
     dist = torch.distributions.Uniform(variable.lower_bound, variable.upper_bound)
     populate_variable(
         variable,
@@ -117,9 +128,21 @@ def normal_population(
 
     invalid = (population < low) | (population > high)
 
+    logger.debug("Sampling normal population with loc=%s, scale=%s", loc, scale)
+
+    iterations = 1
+
     while invalid.any():
         replacements = dist.sample((num_samples,))
         population[invalid] = replacements[invalid]
         invalid = (population < low) | (population > high)
+        iterations += 1
+
+    if iterations > 1:
+        logger.info(
+            "Normal population sampling required %d iterations to fill all %d samples within bounds",
+            iterations,
+            num_samples,
+        )
 
     populate_variable(variable, population, mask=mask, check_shape=num_samples is None)

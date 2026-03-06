@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterator
 
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
 
 
 class Expression(nn.Module):
@@ -51,10 +54,13 @@ class Expression(nn.Module):
             child.print_tree(prefix, i == len(operands) - 1)
 
     def __bool__(self):
-        raise RuntimeError(
-            "Expression cannot be used as a boolean. "
+        msg = (
+            f"Expression ({self.label}) used in a boolean context. "
+            "This usually happens when using 'if' or 'while' on an Expression. "
             "Use .value or explicit reductions instead."
         )
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
     # -----------------
     # Addition
